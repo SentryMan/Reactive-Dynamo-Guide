@@ -313,7 +313,7 @@ The extra ``flatmap`` is because ``DynamoDbAsyncIndex.query`` returns a publishe
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
-# EmbeddedTesting
+# Embedded Testing
 
 There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must run a ``DynamoDBProxyServer`` then create the embedded table using the ``DynamoDbAsyncClient``
 
