@@ -192,6 +192,7 @@ The below method retrieves a single item from dynamo. The ``getItem`` method wil
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
+
 ### Saving a single Item
 The below method saves an entity to dynamo. The ``putItem`` method returns ``Void`` so we use the ``thenReturn`` operator is used to return the given entity when execution completes
  
