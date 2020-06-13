@@ -181,10 +181,11 @@ public class RepositoryImpl implements TableRepository {
 ```
 ## Table Operations
 This section explains how to do various operations on the table.
+
 Note: Any method that immediately returns a ``Mono/Flux.fromFuture`` will execute the future before the mono is subscribed to. If you do not desire this behavior, you must defer execution to subscription time using ``Mono/Flux.defer``.
  
 ### Getting a single Item
-The below method retrieves a single item from dynamo. The ``getItem`` method will extract the keys from the given entity and queries the database for a match
+The below method retrieves a single item from dynamo. The ``getItem`` method will extract the keys from the given entity and query the database for a matchching item.
  
 ```java
   public Mono<Entity> load(Entity entity) {
@@ -277,8 +278,8 @@ The below method batch deletes items by converting a list of ``Entity`` into a `
 
 ### Querying the database
 
-The Async SDK provides a ``QueryConditional`` Object with which you must make your queries
-In the below method, I query for items matching the given hash and sort key and get the response as a ``Flux``.
+The Async SDK provides a ``QueryConditional`` Object with which you must make your queries.
+In the below method, I query for items matching ``hashkey = :hashvalue and sortkey = :sortvalue`` and get the response as a ``Flux``.
 
 ```java
  @Override
@@ -294,7 +295,7 @@ In the below method, I query for items matching the given hash and sort key and 
 ### Querying a secondary Index
 
 In the below method, I query the secondary index for items matching ``hashkey = :hashvalue and sortkey >= :sortvalue`` and get the response as a ``Flux``.
-
+The extra ``flatmap`` is because ``DynamoDbAsyncIndex.query`` returns a publisher of pages.
 ```java
  @Override
   public Flux<Entity> queryIndex(int hashKey, int sortKey, String indexName) {
@@ -312,7 +313,7 @@ In the below method, I query the secondary index for items matching ``hashkey = 
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
-#EmbeddedTesting
+# EmbeddedTesting
 There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must run a ``DynamoDBProxyServer`` then create the embedded table using the ``DynamoDbAsyncClient``
 
 ```java
