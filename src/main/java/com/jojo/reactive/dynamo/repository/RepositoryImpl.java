@@ -12,9 +12,9 @@ import reactor.core.publisher.Mono;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbAsyncIndex;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbAsyncTable;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedAsyncClient;
+import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.TableSchema;
 import software.amazon.awssdk.enhanced.dynamodb.model.BatchWriteItemEnhancedRequest;
-import software.amazon.awssdk.enhanced.dynamodb.model.BatchWriteResult;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import software.amazon.awssdk.enhanced.dynamodb.model.WriteBatch;
 
@@ -56,8 +56,7 @@ public class RepositoryImpl implements TableRepository {
     // convert save future to mono
     return Mono.fromFuture(dynamoDbAsyncTable.putItem(modelMapper.map(entity, EntityDAO.class)))
         // the completable future is void so we return the given entity
-        .thenReturn(entity)
-        .doOnNext(dbResponse -> log.info("Successfully saved to Dynamo\n"));
+        .thenReturn(entity).doOnNext(dbResponse -> log.info("Successfully saved to Dynamo\n"));
   }
 
   @Override
@@ -81,8 +80,7 @@ public class RepositoryImpl implements TableRepository {
 
     // Create a QueryConditional object that's used in the query operation
     QueryConditional queryCondition =
-        QueryConditional.keyEqualTo(
-            key -> key.partitionValue(hashKey).sortValue(sortKey).build());
+        QueryConditional.keyEqualTo(key -> key.partitionValue(hashKey).sortValue(sortKey).build());
 
     return Flux.from(dynamoDbAsyncTable.query(queryCondition).items())
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
@@ -94,9 +92,8 @@ public class RepositoryImpl implements TableRepository {
     DynamoDbAsyncIndex<EntityDAO> asyncIndex = dynamoDbAsyncTable.index(indexName);
 
     // Create a QueryConditional object that's used in the query operation
-    QueryConditional queryCondition =
-        QueryConditional.sortGreaterThanOrEqualTo(
-            key -> key.partitionValue(hashKey).sortValue(sortKey).build());
+    QueryConditional queryCondition = QueryConditional
+        .sortGreaterThanOrEqualTo(key -> key.partitionValue(hashKey).sortValue(sortKey).build());
 
     return Flux.from(asyncIndex.query(queryCondition))
         // convert page contents into a flux
@@ -106,42 +103,30 @@ public class RepositoryImpl implements TableRepository {
 
   // batch
   @Override
-  public Mono<BatchWriteResult> batchPut(List<Entity> entityList) {
+  public Flux<EntityDAO> batchPut(List<Entity> entityList) {
 
-    return Flux.fromIterable(entityList)
-        .map(entity -> modelMapper.map(entity, EntityDAO.class))
-        .map(
-            dao ->
-                WriteBatch.builder(EntityDAO.class)
-                    .mappedTableResource(dynamoDbAsyncTable)
-                    .addPutItem(dao)
-                    .build())
-        .collectList()
-        .map(
-            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(
-            batchWriteItemEnhancedRequest ->
-                Mono.fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)));
+    return Flux.fromIterable(entityList).map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(dao -> WriteBatch.builder(EntityDAO.class).mappedTableResource(dynamoDbAsyncTable)
+            .addPutItem(dao).build())
+        .buffer(25).map(writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
+        BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .flatMap(batchWriteItemEnhancedRequest -> Mono
+            .fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)))
+        .flatMapIterable(result -> result.unprocessedPutItemsForTable(dynamoDbAsyncTable))
+        .doOnComplete(() -> System.out.println("Completed BatchPut"));
   }
 
   @Override
-  public Mono<BatchWriteResult> batchDelete(List<Entity> entityList) {
+  public Flux<Key> batchDelete(List<Entity> entityList) {
 
-    return Flux.fromIterable(entityList)
-        .map(entity -> modelMapper.map(entity, EntityDAO.class))
-        .map(
-            dao ->
-                WriteBatch.builder(EntityDAO.class)
-                    .mappedTableResource(dynamoDbAsyncTable)
-                    .addDeleteItem(dao)
-                    .build())
-        .collectList()
-        .map(
-            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(
-            batchWriteItemEnhancedRequest ->
-                Mono.fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)));
+    return Flux.fromIterable(entityList).map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(dao -> WriteBatch.builder(EntityDAO.class).mappedTableResource(dynamoDbAsyncTable)
+            .addDeleteItem(dao).build())
+        .buffer(25).map(writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
+        BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .flatMap(batchWriteItemEnhancedRequest -> Mono
+            .fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)))
+        .flatMapIterable(result -> result.unprocessedDeleteItemsForTable(dynamoDbAsyncTable))
+        .doOnComplete(() -> System.out.println("Completed BatchDelete"));
   }
 }
