@@ -23,46 +23,50 @@ import software.amazon.awssdk.enhanced.dynamodb.model.WriteBatch;
 public class RepositoryImpl implements TableRepository {
 
   private static final String TABLE_NAME = "some-table";
-  private final DynamoDbAsyncTable<EntityDAO> dynamoDbAsyncTable;
+  private final DynamoDbAsyncTable<EntityDAO> asyncTable;
   private final ModelMapper modelMapper;
   private final DynamoDbEnhancedAsyncClient asyncClient;
-
-  // When a future is converted into a mono, the future runs immediately
-  // unless deferred to subscription time
-  // like so: Flux/Mono.defer(()->load(entity))
 
   @Autowired
   public RepositoryImpl(DynamoDbEnhancedAsyncClient dynamoDbAsyncClient) {
 
     this.modelMapper = new ModelMapper();
     this.asyncClient = dynamoDbAsyncClient;
-    this.dynamoDbAsyncTable =
-        dynamoDbAsyncClient.table(TABLE_NAME, TableSchema.fromBean(EntityDAO.class));
+    this.asyncTable = dynamoDbAsyncClient.table(TABLE_NAME, TableSchema.fromBean(EntityDAO.class));
   }
 
   // Load Method
   @Override
   public Mono<Entity> load(Entity entity) {
 
-    // convert getItem future to mono
-    return Mono.fromFuture(dynamoDbAsyncTable.getItem(modelMapper.map(entity, EntityDAO.class)))
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::getItem)
+        // convert getItem future to mono
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 
   // Save and Update Methods
-
   @Override
   public Mono<Entity> save(Entity entity) {
-    // convert save future to mono
-    return Mono.fromFuture(dynamoDbAsyncTable.putItem(modelMapper.map(entity, EntityDAO.class)))
-        // the completable future is void so we return the given entity
-        .thenReturn(entity).doOnNext(dbResponse -> log.info("Successfully saved to Dynamo\n"));
+
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::putItem)
+        // convert save future to mono
+        .flatMap(Mono::fromFuture)
+        .thenReturn(entity)
+        .doOnNext(dbResponse -> log.info("Successfully saved to Dynamo\n"));
   }
 
   @Override
   public Mono<Entity> update(Entity entity) {
 
-    return Mono.fromFuture(dynamoDbAsyncTable.updateItem(modelMapper.map(entity, EntityDAO.class)))
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::updateItem)
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class))
         .doOnNext(dbResponse -> log.info("Successfully Updated Dynamo Record\n"));
   }
@@ -70,7 +74,10 @@ public class RepositoryImpl implements TableRepository {
   // Delete
   public Mono<Entity> delete(Entity entity) {
 
-    return Mono.fromFuture(dynamoDbAsyncTable.deleteItem(modelMapper.map(entity, EntityDAO.class)))
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::deleteItem)
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 
@@ -82,51 +89,70 @@ public class RepositoryImpl implements TableRepository {
     QueryConditional queryCondition =
         QueryConditional.keyEqualTo(key -> key.partitionValue(hashKey).sortValue(sortKey).build());
 
-    return Flux.from(dynamoDbAsyncTable.query(queryCondition).items())
+    // convert sdkPublisher to Reactor publisher
+    return Flux.from(asyncTable.query(queryCondition).items())
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 
   @Override
-  public Flux<Entity> queryIndex(int hashKey, int sortKey, String indexName) {
+  public Flux<Entity> queryIndex(int indexHashKey, int indexSortKey, String indexName) {
     // define what index to query
-    DynamoDbAsyncIndex<EntityDAO> asyncIndex = dynamoDbAsyncTable.index(indexName);
+    DynamoDbAsyncIndex<EntityDAO> asyncIndex = asyncTable.index(indexName);
 
     // Create a QueryConditional object that's used in the query operation
-    QueryConditional queryCondition = QueryConditional
-        .sortGreaterThanOrEqualTo(key -> key.partitionValue(hashKey).sortValue(sortKey).build());
+    QueryConditional queryCondition =
+        QueryConditional.sortGreaterThanOrEqualTo(
+            key -> key.partitionValue(indexHashKey).sortValue(indexSortKey).build());
 
     return Flux.from(asyncIndex.query(queryCondition))
         // convert page contents into a flux
-        .flatMapIterable(page -> page.items())
+        .flatMapIterable(Page::items)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 
-  // batch
+  // batch operations
   @Override
   public Flux<EntityDAO> batchPut(List<Entity> entityList) {
 
-    return Flux.fromIterable(entityList).map(entity -> modelMapper.map(entity, EntityDAO.class))
-        .map(dao -> WriteBatch.builder(EntityDAO.class).mappedTableResource(dynamoDbAsyncTable)
-            .addPutItem(dao).build())
-        .buffer(25).map(writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-        BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(batchWriteItemEnhancedRequest -> Mono
-            .fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)))
-        .flatMapIterable(result -> result.unprocessedPutItemsForTable(dynamoDbAsyncTable))
-        .doOnComplete(() -> System.out.println("Completed BatchPut"));
+    return Flux.fromIterable(entityList)
+        .map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(
+            dao ->
+                WriteBatch.builder(EntityDAO.class)
+                    .mappedTableResource(asyncTable)
+                    .addPutItem(dao)
+                    .build())
+        .buffer(25)
+        // Create a BatchWriteItemEnhancedRequest object
+        .map(
+            writeBatchList ->
+                BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .map(asyncClient::batchWriteItem)
+        .flatMap(Mono::fromFuture)
+        // if all items in the batch saved, the Flux will complete without
+        // emitting data
+        .flatMapIterable(result -> result.unprocessedPutItemsForTable(asyncTable));
   }
 
   @Override
   public Flux<Key> batchDelete(List<Entity> entityList) {
 
-    return Flux.fromIterable(entityList).map(entity -> modelMapper.map(entity, EntityDAO.class))
-        .map(dao -> WriteBatch.builder(EntityDAO.class).mappedTableResource(dynamoDbAsyncTable)
-            .addDeleteItem(dao).build())
-        .buffer(25).map(writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-        BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(batchWriteItemEnhancedRequest -> Mono
-            .fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)))
-        .flatMapIterable(result -> result.unprocessedDeleteItemsForTable(dynamoDbAsyncTable))
-        .doOnComplete(() -> System.out.println("Completed BatchDelete"));
+    return Flux.fromIterable(entityList)
+        .map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(
+            dao ->
+                WriteBatch.builder(EntityDAO.class)
+                    .mappedTableResource(asyncTable)
+                    .addDeleteItem(dao)
+                    .build())
+        .buffer(25)
+        // Create a BatchWriteItemEnhancedRequest object
+        .map(
+            writeBatchList ->
+                BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .map(asyncClient::batchWriteItem)
+        .flatMap(Mono::fromFuture)
+        // if all items in the batch deleted, the Flux will complete without emitting data
+        .flatMapIterable(result -> result.unprocessedDeleteItemsForTable(asyncTable));
   }
 }
