@@ -4,6 +4,7 @@
  This guide is made for you.
  
  It explains all the operations in the above repository.
+ I also assumes you have set up the basic AWS CLI.
 
 ## Dependencies
 
