@@ -4,7 +4,7 @@
  This guide is made for you.
  
  It explains all the operations in the above repository.
- It also assumes you have set up the basic AWS CLI.
+ This guide assumes that you're at least somewhat familiar with reactive programming and reactive types. It also assumes you have set up the basic AWS CLI.
 
 ## Dependencies
 
@@ -18,6 +18,12 @@
 ```
 
 ```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-webflux</artifactId>
+    <version>2.3.1.RELEASE</version>
+</dependency>
+
 <dependency>
 	<groupId>org.modelmapper</groupId>
 	<artifactId>modelmapper</artifactId>
@@ -106,7 +112,7 @@
 ```
 ## Setup
 
-This section explains how to setup your initial classes
+This section explains how to setup your initial classes for a local enviroment.
 
 1. First you're going to instantiate a ``DynamoDbEnhancedAsyncClient``
 
@@ -123,9 +129,10 @@ This section explains how to setup your initial classes
         .build();
   }
 ``` 
-2. Create your Model/DAO class 
-Note: At the time of writing, the Async Dynamo Drivers only accept datatypes matching the Dynamo Scalar types,
-so to store an object, you must serialize it to one of those types
+2. Create your Model/DAO class
+ 
+**Note:** At the time of writing, the Async Dynamo Drivers only accept datatypes matching the Dynamo Scalar types,
+so to store an object, you must serialize it to one of those types. I find using ``ObjectMapper`` to serialize to a string to be a relatively easy workaround.
 ```java
 @DynamoDbBean
 @Setter
@@ -133,8 +140,8 @@ public class EntityDAO {
 
   private String hashKey;
   private String sortKey;
-  private int secondaryHashKey;
-  private int secondarySortKey;
+  private int indexHashKey;
+  private int indexSortKey;
 
   @DynamoDbPartitionKey
   @DynamoDbAttribute(value = "hashKey")
@@ -147,20 +154,20 @@ public class EntityDAO {
   public String getSortKey() {
     return sortKey;
   }
-
+// for secondary indexes you must state the index names
   @DynamoDbSecondaryPartitionKey(indexNames = {"index"})
-  public int getSecondaryHashKey() {
-    return secondaryHashKey;
+  public int getIndexHashKey() {
+    return indexHashKey;
   }
 
   @DynamoDbSecondarySortKey(indexNames = {"index"})
-  public int getSecondarySortKey() {
-    return secondarySortKey;
+  public int getIndexSortKey() {
+    return indexSortKey;
   }
 }
 ``` 
 
-3. Setup your repository class with a ``DynamoDbAsyncTable`` instance using the async client bean and the DAO class
+3. Setup your repository class with a ``DynamoDbAsyncTable`` instance using the async client bean and the DAO class. (``DynamoDbAsyncTable`` is the async equivalent to the old ``DynamoDBMapper``.)
 ```java
 
 @Repository
@@ -183,24 +190,46 @@ public class RepositoryImpl implements TableRepository {
 ## Table Operations
 This section explains how to do various operations on the table.
 
-Note: Any method that immediately returns a ``Mono/Flux.fromFuture`` will execute the future before the mono is subscribed to. If you do not desire this behavior, you must defer execution to subscription time using ``Mono/Flux.defer``.
+Most operations of the Enhanced Dynamo SDK return a ``CompletableFuture``, so to make these operations non-blocking and reactive, you can use the ``fromFuture()`` method of a Reactive Publisher to convert the future into a reactive stream.
+
+**Note:** Futures passed to a ``Mono/Flux.fromFuture`` will execute the future before the Publisher is subscribed to.  e.g:
+```java
+
+CompletableFuture<DAO> future = dynamoDbAsyncTable.updateItem(entityDAO)
+//without deferring, the save method executes before the flux emits any data
+  
+  Flux.just(1,2,3).then(Mono.fromFuture(future).subscribe();
+```
+Be sure you are running the future inside the reactive stream.
+ 
  
 ### Getting a single Item
-The below method retrieves a single item from dynamo. The ``getItem`` method will extract the keys from the given entity and query the database for a matchching item.
+The below method retrieves a single item from dynamo. The ``getItem`` method will extract the keys from the given entity and query the database for one matching item.
  
 ```java
   public Mono<Entity> load(Entity entity) {
-    return Mono.fromFuture(dynamoDbAsyncTable.getItem(modelMapper.map(entity, EntityDAO.class)))
+
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        //run the future in the reactive stream
+        .map(asyncTable::getItem)
+        // convert getItem future to a mono
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
 
 ### Saving a single Item
-The below method saves an entity to dynamo. The ``putItem`` method returns ``Void`` so we use the ``thenReturn`` operator is used to return the given entity when execution completes
+The below method saves an entity to dynamo. The ``putItem`` method returns ``CompletableFuture<Void>`` so we use the ``thenReturn`` operator on the stream to return the given entity when execution completes.
  
 ```java
   public Mono<Entity> save(Entity entity) {
-    return Mono.fromFuture(dynamoDbAsyncTable.putItem(modelMapper.map(entity, EntityDAO.class)))
+
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::putItem)
+        // convert save future to mono
+        .flatMap(Mono::fromFuture)
         .thenReturn(entity)
         .doOnNext(dbResponse -> log.info("Successfully saved to Dynamo\n"));
   }
@@ -210,7 +239,10 @@ The below method updates a single item in the table. Like the load method, it ex
 
 ```java
   public Mono<Entity> update(Entity entity) {
-    return Mono.fromFuture(dynamoDbAsyncTable.updateItem(modelMapper.map(entity, EntityDAO.class)))
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::updateItem)
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class))
         .doOnNext(dbResponse -> log.info("Successfully Updated Dynamo Record\n"));
   }
@@ -221,92 +253,45 @@ Deletes an item from the table. That's basically it.
 
 ```java
   public Mono<Entity> delete(Entity entity) {
-    return Mono.fromFuture(dynamoDbAsyncTable.deleteItem(modelMapper.map(entity, EntityDAO.class)))
+    return Mono.just(entity)
+        .map(e -> modelMapper.map(entity, EntityDAO.class))
+        .map(asyncTable::deleteItem)
+        .flatMap(Mono::fromFuture)
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
-
-### Batch Put
-
-The below method batch saves a list of ``Entity`` into the db and returns the result.
-Note: since the actual write request happens inside the ``Flux.flatmap`` the execution is deferred to subscription
-```java
-  public Mono<BatchWriteResult> batchPut(List<Entity> entityList) {
-    return Flux.fromIterable(entityList)
-        .map(entity -> modelMapper.map(entity, EntityDAO.class))
-        //map each EntityDAO into a WriteBatch
-        .map(
-            dao ->
-                WriteBatch.builder(EntityDAO.class)
-                    .mappedTableResource(dynamoDbAsyncTable)
-                    .addPutItem(dao)
-                    .build())
-        .collectList()
-        //map List<WriteBatch> into BatchWriteItemEnhancedRequest
-        .map(
-            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(
-            batchWriteItemEnhancedRequest ->
-                Mono.fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)));
-  }
-```
-### Batch Delete
-
-The below method batch deletes items by converting a list of ``Entity`` into a ``BatchWriteItemEnhancedRequest`` and returns the result.
-
-```java
-  public Mono<BatchWriteResult> batchPut(List<Entity> entityList) {
-    return Flux.fromIterable(entityList)
-        .map(entity -> modelMapper.map(entity, EntityDAO.class))
-        //map each EntityDAO into a WriteBatch
-        .map(
-            dao ->
-                WriteBatch.builder(EntityDAO.class)
-                    .mappedTableResource(dynamoDbAsyncTable)
-                    .addDeleteItem(dao)
-                    .build())
-        .collectList()
-        //map List<WriteBatch> into BatchWriteItemEnhancedRequest
-        .map(
-            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
-            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
-        .flatMap(
-            batchWriteItemEnhancedRequest ->
-                Mono.fromFuture(asyncClient.batchWriteItem(batchWriteItemEnhancedRequest)));
-  }
-```
-
 ### Querying the database
+The query method of the sdk returns a reactive ``PagePublisher<T>`` which is easily converted into a Reactor publisher using the ``Flux.from`` method.
 
-The Async SDK provides a ``QueryConditional`` Object with which you must make your queries.
-In the below method, I query for items matching ``hashkey = :hashvalue and sortkey = :sortvalue`` and get the response as a ``Flux``.
+To query the database, the SDK has provided a [``QueryConditional``](https://sdk.amazonaws.com/java/api/latest/index.html?software/amazon/awssdk/enhanced/dynamodb/model/QueryConditional.html) with which you must make your queries. It has various built-in methods for various queries.
+
+In the below method, I use the ``keyEqualTo`` method and pass the key values to build a query condition equivalent to  ``hashkey = :hashvalue and sortkey = :sortvalue``. I use the ``.items()`` method on the query to receive the stream of desired items.
 
 ```java
- @Override
   public Flux<Entity> query(String hashKey, String sortKey) {
     QueryConditional queryCondition =
         QueryConditional.keyEqualTo(
             key -> key.partitionValue(hashKey).sortValue(sortKey).build());
+            
+    //convert sdkPublisher to Reactor Publisher
     return Flux.from(dynamoDbAsyncTable.query(queryCondition).items())
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
-
 ### Querying a secondary Index
 
-In the below method, I query the secondary index for items matching ``hashkey = :hashvalue and sortkey >= :sortvalue`` and get the response as a ``Flux``.
-The extra ``flatmap`` is because ``DynamoDbAsyncIndex.query`` returns a publisher of pages.
+The index query methods of the sdk return a reactive ``SdkPublisher<T>``. which requires an extra step to process.
+
+In the below method, I query the secondary index for items matching ``indexHashkey = :indexHashvalue and indexSortkey >= :indexSortValue`` and get the response as a ``Flux<Page>``. I then use the ``flatmapIterable`` to extract the items from the ``Page``.
 ```java
- @Override
-  public Flux<Entity> queryIndex(int hashKey, int sortKey, String indexName) {
+  public Flux<Entity> queryIndex(int indexHashKey, int indexSortKey, String indexName) {
     // define what index to query
     DynamoDbAsyncIndex<EntityDAO> asyncIndex = dynamoDbAsyncTable.index(indexName);
 
     // Create a QueryConditional object that's used in the query operation
     QueryConditional queryCondition =
         QueryConditional.sortGreaterThanOrEqualTo(
-            key -> key.partitionValue(hashKey).sortValue(sortKey).build());
+            key -> key.partitionValue(indexHashKey).sortValue(indexSortKey).build());
 
     return Flux.from(asyncIndex.query(queryCondition))
         // convert page contents into a flux
@@ -314,9 +299,63 @@ The extra ``flatmap`` is because ``DynamoDbAsyncIndex.query`` returns a publishe
         .map(dbResponse -> modelMapper.map(dbResponse, Entity.class));
   }
 ```
+### Batch Put
+
+The below method batch saves a list of ``Entity`` into the db and completes the ``Flux``.
+If any part of the batch fails to process, the returned flux will emit the unprocessed entities.
+
+**Note:** As you know, the limit of items in a single write batch is 25. To bypass this, I've written the following batch methods to automatically partition the given list using ``buffer`` and make multiple consecutive write batch requests if the given list has more than 25 elements.
+ 
+```java
+  public Flux<EntityDAO> batchPut(List<Entity> entityList) {
+
+    return Flux.fromIterable(entityList)
+        .map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(
+            dao ->
+                WriteBatch.builder(EntityDAO.class)
+                    .mappedTableResource(dynamoDbAsyncTable)
+                    .addPutItem(dao)
+                    .build())
+        .buffer(25)
+        .map(
+            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
+            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .map(asyncClient::batchWriteItem)
+        .flatMap(Mono::fromFuture)
+        // if all items in the batch saved, the Flux will complete without emitting data
+        .flatMapIterable(result -> result.unprocessedPutItemsForTable(dynamoDbAsyncTable));
+  }
+ ```
+### Batch Delete
+
+The below method batch deletes items by converting a list of ``Entity`` into a ``BatchWriteItemEnhancedRequest``.
+If any request fails to process, the returned flux will emit the keys of the unprocessed data.
+```java
+  public Flux<Key> batchDelete(List<Entity> entityList) {
+
+    return Flux.fromIterable(entityList)
+        .map(entity -> modelMapper.map(entity, EntityDAO.class))
+        .map(
+            dao ->
+                WriteBatch.builder(EntityDAO.class)
+                    .mappedTableResource(dynamoDbAsyncTable)
+                    .addDeleteItem(dao)
+                    .build())
+        .buffer(25)
+        .map(
+            writeBatchList -> // Create a BatchWriteItemEnhancedRequest object
+            BatchWriteItemEnhancedRequest.builder().writeBatches(writeBatchList).build())
+        .map(asyncClient::batchWriteItem)
+        .flatMap(Mono::fromFuture)        
+        // if all items in the batch were processed, the Flux will complete without emitting data
+        .flatMapIterable(result -> result.unprocessedDeleteItemsForTable(dynamoDbAsyncTable));
+  }
+```
+
 # Embedded Testing
 
-There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must run a ``DynamoDBProxyServer`` then create the embedded table using the ``DynamoDbAsyncClient``
+There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must run a ``DynamoDBProxyServer`` then create the in-memory table using the ``DynamoDbAsyncClient``.
 
 ```java
 @Configuration
@@ -354,7 +393,7 @@ public class DynamoEmbeddedConfig {
   public DynamoDbEnhancedAsyncClient dynamoDbAsyncClient() {
 
     DynamoDbAsyncClient dynamo = DynamoDbAsyncClient.builder()
-        .endpointOverride(URI.create("http://localhost:" + port)).region(Region.US_EAST_1).build();
+        .endpointOverride(URI.create("http://localhost:" + port)).build();
     createTable(dynamo);
     return DynamoDbEnhancedAsyncClient.builder().dynamoDbClient(dynamo).build();
   }
@@ -367,9 +406,9 @@ public class DynamoEmbeddedConfig {
                 .attributeType(ScalarAttributeType.S).build(),
             AttributeDefinition.builder().attributeName("sortKey")
                 .attributeType(ScalarAttributeType.S).build(),
-            AttributeDefinition.builder().attributeName("secondaryHashKey")
+            AttributeDefinition.builder().attributeName("indexHashKey")
                 .attributeType(ScalarAttributeType.N).build(),
-            AttributeDefinition.builder().attributeName("secondarySortKey")
+            AttributeDefinition.builder().attributeName("indexSortKey")
                 .attributeType(ScalarAttributeType.N).build())
         .keySchema(
             KeySchemaElement.builder().attributeName("hashKey").keyType(KeyType.HASH).build(),
@@ -377,15 +416,15 @@ public class DynamoEmbeddedConfig {
         .provisionedThroughput(thouroghput).globalSecondaryIndexes(secondaryIndex())
         .tableName(TABLE_NAME).build();
 
-    Mono.fromFuture(dynamo.createTable(request)).subscribe();
+    Mono.fromFuture(dynamo.createTable(request)).block();
   }
 
   GlobalSecondaryIndex secondaryIndex() {
     Projection projection = Projection.builder().projectionType("ALL").build();
 
     return GlobalSecondaryIndex.builder().indexName("index").keySchema(
-        KeySchemaElement.builder().attributeName("secondaryHashKey").keyType(KeyType.HASH).build(),
-        KeySchemaElement.builder().attributeName("secondarySortKey").keyType(KeyType.RANGE).build())
+        KeySchemaElement.builder().attributeName("indexHashKey").keyType(KeyType.HASH).build(),
+        KeySchemaElement.builder().attributeName("indexSortKey").keyType(KeyType.RANGE).build())
         .provisionedThroughput(thouroghput).projection(projection).build();
   }
 }
