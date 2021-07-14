@@ -1,12 +1,13 @@
 package com.jojo.reactive.dynamo.repository;
 
 import java.util.List;
+
 import com.jojo.reactive.dynamo.models.Entity;
 import com.jojo.reactive.dynamo.models.EntityDAO;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
-import software.amazon.awssdk.enhanced.dynamodb.model.BatchWriteResult;
 
 public interface TableRepository {
 

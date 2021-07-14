@@ -29,3 +29,6 @@ build/
 
 ### VS Code ###
 .vscode/
+*.so
+*.dylib
+*.dll

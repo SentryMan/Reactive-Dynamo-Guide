@@ -10,13 +10,14 @@ import lombok.Setter;
 public class Entity {
   private String hashKey = "hash";
   private String sortKey = "sort";
-  private int secondaryHashKey = 0;
-  private int secondarySortKey = 0;
+  private int indexHashKey = 0;
+  private int indexSortKey = 0;
+  private CustomType obj = new CustomType();
 
   public Entity(int i, boolean bool) {
     if (bool) hashKey = hashKey + i;
     sortKey = sortKey + i;
-    if (bool) secondaryHashKey = secondaryHashKey + i;
-    secondarySortKey = secondarySortKey + i;
+    if (bool) indexHashKey = indexHashKey + i;
+    indexSortKey = indexSortKey + i;
   }
 }

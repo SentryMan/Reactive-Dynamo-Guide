@@ -355,7 +355,7 @@ If any request fails to process, the returned flux will emit the keys of the unp
 
 # Embedded Testing
 
-There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must run a ``DynamoDBProxyServer`` then create the in-memory table using the ``DynamoDbAsyncClient``.
+There is no ``EmbeddedDynamo`` class in the new sdk, so to create an in-memory database you must use the old LocalDynamoDB to create the in-memory table.
 
 ```java
 @Configuration
@@ -369,24 +369,14 @@ public class DynamoEmbeddedConfig {
 
   DynamoEmbeddedConfig() throws Exception {
     System.setProperty("sqlite4java.library.path", "native-libs");
-    startEmbeddedDB();
   }
 
-  // create embedded dynamo on random port
-  private static void startEmbeddedDB() throws Exception {
-    ServerSocket socket = new ServerSocket(0);
+  @Bean
+  public DynamoDbEnhancedAsyncClient dynamoDbAsyncClient() {
 
-    port = Integer.toString(socket.getLocalPort());
-    socket.close();
-    server =
-        ServerRunner.createServerFromCommandLineArgs(new String[] {"-inMemory", "-port", port});
-
-    server.start();
-  }
-
-  // stop embedded dynamo
-  public static void stopEmbeddedDB() throws Exception {
-    server.stop();
+    final DynamoDbAsyncClient dynamo = DynamoDBEmbedded.create().dynamoDbAsyncClient();
+    createTable(dynamo);
+    return DynamoDbEnhancedAsyncClient.builder().dynamoDbClient(dynamo).build();
   }
 
   @Bean

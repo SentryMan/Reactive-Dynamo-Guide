@@ -14,12 +14,13 @@ public class EntityDAO {
 
   private String hashKey;
   private String sortKey;
-  private int secondaryHashKey;
-  private int secondarySortKey;
+  private int indexHashKey;
+  private int indexSortKey;
+  private CustomType obj;
 
   @DynamoDbPartitionKey
   @DynamoDbAttribute(value = "hashKey")
-  public String gethashKey() {
+  public String getHashKey() {
     return hashKey;
   }
 
@@ -29,13 +30,19 @@ public class EntityDAO {
     return sortKey;
   }
 
+  @DynamoDbAttribute(value = "secondaryHashKey")
   @DynamoDbSecondaryPartitionKey(indexNames = {"index"})
-  public int getSecondaryHashKey() {
-    return secondaryHashKey;
+  public int getIndexHashKey() {
+    return indexHashKey;
   }
 
+  @DynamoDbAttribute(value = "secondarySortKey")
   @DynamoDbSecondarySortKey(indexNames = {"index"})
-  public int getSecondarySortKey() {
-    return secondarySortKey;
+  public int getIndexSortKey() {
+    return indexSortKey;
+  }
+
+  public CustomType getObj() {
+    return obj;
   }
 }
