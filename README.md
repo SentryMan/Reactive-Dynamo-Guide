@@ -11,9 +11,9 @@
 ```xml
 <properties>
 	<java.version>1.8</java.version>
-	<version.dynamodblocal>1.12.0</version.dynamodblocal>
+	<version.dynamodblocal>1.16.0</version.dynamodblocal>
 	<version.sqllite4java>1.0.392</version.sqllite4java>
-	<version.awssdk>2.13.18</version.awssdk>
+	<version.awssdk>2.16.100</version.awssdk>
 </properties>
 ```
 
