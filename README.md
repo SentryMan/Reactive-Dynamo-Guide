@@ -131,8 +131,7 @@ This section explains how to setup your initial classes for a local enviroment.
 ``` 
 2. Create your Model/DAO class
  
-**Note:** At the time of writing, the Async Dynamo Drivers only accept datatypes matching the Dynamo Scalar types,
-so to store an object, you must serialize it to one of those types. I find using ``ObjectMapper`` to serialize to a string to be a relatively easy workaround.
+**Note:** To Save/Read a nested custom type, the custom typemust be annotated with `@DynamoDbBean`
 ```java
 @DynamoDbBean
 @Setter
